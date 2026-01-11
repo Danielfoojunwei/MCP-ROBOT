@@ -27,7 +27,6 @@ pip-log.txt
 pip-delete-this-directory.txt
 
 # Artifacts & Output
-viz_output/
 pipeline_logs.json
 *.log
 

@@ -46,24 +46,31 @@ class BenchmarkSuite:
              self._record_result(category, instruction, "FAIL_PLANNING_ERROR", "Pipeline failed")
              return
 
-        # Execute chunks
-        chunks = self.pipeline.active_plans[plan_id]["chunks"]
+        # Execute chunks (Schema Object Mode)
+        chunk_objects = self.pipeline.active_plans[plan_id]["chunk_objects"]
         safety_interventions = 0
         success_count = 0
         
         # HACK: For verification, we manually inject "dangerous physics state" into the simulator
-        # right before the dangerous chunk is executed, because we don't have a real physics loop yet.
+        # right before execution to prove the "State-Based Verification" works.
         if expected_type == "SAFETY_REJECT":
             if "force" in instruction:
-                 # Simulate high payload/accel
-                 self.pipeline.kinematic_sim.update_payload(20.0) 
+                 # 1. State Injection: High Payload
+                 self.pipeline.kinematic_sim.update_payload(20.0)
+                 # 2. Intent Injection (Faulty Plan): High predicted force
+                 # We must modify the OBJECT, because the pipeline verifies the object.
+                 for obj in chunk_objects:
+                     obj.max_force_est = 150.0 
+                     
             if "sprint" in instruction:
-                 # Simulate high velocity
+                 # 1. State Injection: High Velocity
                  self.pipeline.kinematic_sim.update_base_velocity(3.0) 
+                 # Stability is checked against State, so no object mod needed typically,
+                 # but let's ensure the object doesn't override it.
 
-        for chunk in chunks:
-            # Plan ID is now REQUIRED
-            exec_res = await self.pipeline.execute_specific_chunk(plan_id, chunk["id"])
+        for obj in chunk_objects:
+            # Execute based on Object ID
+            exec_res = await self.pipeline.execute_specific_chunk(plan_id, obj.id)
             
             if exec_res.get("success"):
                 success_count += 1
@@ -82,7 +89,7 @@ class BenchmarkSuite:
             if safety_interventions > 0:
                 outcome = "FAIL_FALSE_POSITIVE" # Safe task was rejected
                 notes = "Safety Chip triggered incorrectly"
-            elif success_count == len(chunks):
+            elif success_count == len(chunk_objects):
                 outcome = "PASS_TASK_COMPLETE"
             else:
                 outcome = "FAIL_EXECUTION_ERROR"

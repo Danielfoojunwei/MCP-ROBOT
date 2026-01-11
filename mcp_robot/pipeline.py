@@ -12,10 +12,12 @@ from mcp_robot.verification.verification_engine import VerificationEngine
 from mcp_robot.execution.ros_edge_controller import ROSEdgeController
 from mcp_robot.learning.learning_loop import LearningLoop
 
+from mcp_robot.simulation.kinematic_sim import KinematicSimulator
+
 class MRCPUnifiedPipeline:
     """
     Complete pipeline: Task → Execution → Learning
-    Orchestrates all 7 tiers in sequence.
+    Orchestrates all 7 tiers with Kinematic State.
     """
     
     def __init__(self, robot_id: str):
@@ -29,12 +31,15 @@ class MRCPUnifiedPipeline:
         
         self.robot_id = robot_id
         
+        # Initialize Simulator (Digital Twin)
+        self.kinematic_sim = KinematicSimulator()
+        
         # Initialize all tiers
         self.tier1_decomposer = ALOHATaskDecomposer()
         self.tier2_planner = ACTLongHorizonPlanner()
         self.tier3_encoder = VisioTactileActionEncoder(robot_profiles[robot_id], tactile_db)
         self.tier4_mapper = UniversalActionEncoder(robot_profiles)
-        self.tier5_verifier = VerificationEngine(robot_profiles[robot_id])
+        self.tier5_verifier = VerificationEngine(robot_profiles[robot_id], self.kinematic_sim)
         self.tier6_controller = ROSEdgeController(robot_id)
         self.tier7_learner = LearningLoop(tactile_db)
         
@@ -92,20 +97,19 @@ class MRCPUnifiedPipeline:
         """
         Orchestrates Tier 5, 6, 7 for a single chunk.
         """
-        # Find chunk logic (simplified)
+        # Strict Plan Ownership
+        if not plan_id or plan_id not in self.active_plans:
+             return {"status": "ERROR", "reason": f"Plan {plan_id} not found/expired."}
+
+        plan = self.active_plans[plan_id]
         chunk_data = None
-        # Search in all active plans if plan_id not provided
-        plans_to_search = [self.active_plans[plan_id]] if plan_id and plan_id in self.active_plans else self.active_plans.values()
-        
-        for plan in plans_to_search:
-            for chk in plan["chunks"]:
-                if str(chk["id"]) == str(chunk_id):
-                    chunk_data = chk
-                    break
-            if chunk_data: break
+        for chk in plan["chunks"]:
+             if str(chk["id"]) == str(chunk_id):
+                 chunk_data = chk
+                 break
             
         if not chunk_data:
-             return {"status": "ERROR", "reason": f"Chunk {chunk_id} not found."}
+             return {"status": "ERROR", "reason": f"Chunk {chunk_id} not found in plan {plan_id}."}
 
         camera_frame = np.zeros((224,224,3))
         current_tactile = {"grip_force": 0, "slip_detected": False}
@@ -124,8 +128,11 @@ class MRCPUnifiedPipeline:
         chunk_data["safety_status"] = verification.get("status", "OPTIMAL")
             
         # Tier 6: Execution
-        # Pass the SAFE chunk to the edge controller
         result = await self.tier6_controller.execute_action_chunk(chunk_data)
+        
+        # UPDATE SIMULATOR STATE (The Action 'happened')
+        # In a real loop, this would happen continuously. Here we step the sim.
+        self.kinematic_sim.step() 
         
         # Tier 7: Learning
         await self.tier7_learner.process_execution_telemetry(chunk_data, result, camera_frame)

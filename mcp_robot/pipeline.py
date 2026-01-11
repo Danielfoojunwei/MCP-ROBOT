@@ -9,7 +9,7 @@ from mcp_robot.planning.long_horizon_planner import ACTLongHorizonPlanner
 from mcp_robot.action_encoder.visio_tactile_action_encoder import VisioTactileActionEncoder
 from mcp_robot.action_encoder.universal_action_encoder import UniversalActionEncoder
 from mcp_robot.verification.verification_engine import VerificationEngine
-from mcp_robot.execution.ros_interface import ROS2ExecutionBridge
+from mcp_robot.execution.ros_interface import ROS2Adapter
 from mcp_robot.contracts.schemas import JointTrajectoryChunk
 from mcp_robot.simulation.kinematic_sim import KinematicSimulator
 from mcp_robot.verification.physics_engine import PhysicsEngine
@@ -26,7 +26,16 @@ class MRCPUnifiedPipeline:
         robot_profiles = {robot_id: {
             "workspace": {"x": {"min":-1, "max":1}, "y": {"min":-1, "max":1}, "z": {"min":0, "max":1}},
             "gripper": {"max_force_n": 100},
-            "joint_names": ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6"]
+            "joint_names": ["joint_1", "joint_2", "joint_3", "joint_4", "joint_5", "joint_6", "joint_7"],
+            "joint_limits": {
+                "joint_1": (-3.14, 3.14),
+                "joint_2": (-2.0, 2.0),
+                "joint_3": (-3.14, 3.14),
+                "joint_4": (-3.14, 3.14),
+                "joint_5": (-3.14, 3.14),
+                "joint_6": (-3.14, 3.14),
+                "joint_7": (-6.28, 6.28)
+            }
         }}
         tactile_db = {} 
         
@@ -43,7 +52,8 @@ class MRCPUnifiedPipeline:
         self.tier5_verifier = VerificationEngine(robot_profiles[robot_id], self.kinematic_sim)
         
         # TIER 6: Real ROS2 Bridge
-        self.tier6_bridge = ROS2ExecutionBridge(robot_id)
+        # Configurable: "SIM" (Digital Twin) or "HARDWARE" (Real Robot)
+        self.tier6_bridge = ROS2Adapter(robot_id, execution_mode="SIM")
         
         self.tier7_learner = LearningLoop(tactile_db)
         
@@ -84,8 +94,15 @@ class MRCPUnifiedPipeline:
         )
         
         # TIER 4: Returns List[JointTrajectoryChunk] Objects
+        current_sim_state = self.kinematic_sim.get_state_vector()
+        current_joints = current_sim_state.get("joints")
+        
         traj_objects = await self.tier4_mapper.map_chunks_to_robot(
-             chunks, self.robot_id, camera_frames["wrist"], camera_frames["overhead"]
+             chunks, 
+             self.robot_id, 
+             camera_frames["wrist"], 
+             camera_frames["overhead"],
+             current_joints=current_joints
         )
 
         plan_id = f"plan_{int(asyncio.get_event_loop().time())}"
@@ -131,7 +148,9 @@ class MRCPUnifiedPipeline:
         sim_state = self.kinematic_sim.get_state_vector()
         
         # VERIFY TRAJECTORY OBJECT
-        safety_report = PhysicsEngine.verify_trajectory(target_chunk_obj, sim_state)
+        # Pass Configured Joint Limits from Profile
+        joint_limits = self.tier5_verifier.robot_profile.get("joint_limits")
+        safety_report = PhysicsEngine.verify_trajectory(target_chunk_obj, sim_state, joint_limits)
         
         if not safety_report["valid"]:
             print(f"[Tier 5] CRITICAL: Safety Chip Rejected Trajectory: {safety_report['reason']}")
@@ -144,6 +163,12 @@ class MRCPUnifiedPipeline:
         result = await self.tier6_bridge.execute_trajectory(target_chunk_obj)
         
         # UPDATE SIMULATOR STATE
+        if result.get("success"):
+            last_wp = target_chunk_obj.waypoints[-1]
+            # Convert JointState list to list of values (ordered by keys?)
+            # JointState has .positions which is list. The names match .joint_names.
+            self.kinematic_sim.set_joint_state(last_wp.positions)
+            
         self.kinematic_sim.step() 
         
         # Tier 7: Learning (Mock log)

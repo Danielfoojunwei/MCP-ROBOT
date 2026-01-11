@@ -26,7 +26,14 @@ class UniversalActionEncoder:
         q7 = 0.0 # Flange
         return [float(q) for q in [q1, q2, q3, q4, q5, q6, q7]]
 
-    async def map_chunks_to_robot(self, chunks: List[Dict], robot_id: str, wrist_cam, overhead_cam) -> List[JointTrajectoryChunk]:
+    async def map_chunks_to_robot(
+        self, 
+        chunks: List[Dict], 
+        robot_id: str, 
+        wrist_cam, 
+        overhead_cam, 
+        current_joints: Dict[str, float] = None
+    ) -> List[JointTrajectoryChunk]:
         """
         Converts Planning Chunks -> Validated JointTrajectoryChunks.
         """
@@ -43,29 +50,38 @@ class UniversalActionEncoder:
             # 1. Denormalize
             if isinstance(target_pos[0], list): target_pos = target_pos[0] # Take first point
             
-            # Simple assumption: Input is already normalized 0-1 or roughly raw. 
-            # We map to workspace if provided.
             workspace = profile.get("workspace", {"x": {"min":-1, "max":1}, "y": {"min":-1, "max":1}, "z": {"min":0, "max":1}})
             world_pos = self._denormalize_to_world(target_pos, workspace)
 
             # 2. IK
             target_joints = self._solve_ik(world_pos)
             
-            # Create ONE waypoint for now (point-to-point move)
-            # A real trajectory would have 10-50 samples
-            wp = JointState(names=joint_names, positions=target_joints)
+            # Create Trajectory
+            waypoints = []
+            
+            # 2a. Start Point (Current State) - Crucial for Continuity
+            if current_joints:
+                start_positions = [current_joints.get(name, 0.0) for name in joint_names]
+                waypoints.append(JointState(names=joint_names, positions=start_positions))
+            
+            # 2b. Target Point
+            waypoints.append(JointState(names=joint_names, positions=target_joints))
             
             # Construct the Strict Contract Object
             traj = JointTrajectoryChunk(
                 id=str(chunk["id"]),
                 description=chunk.get("description", "move"),
                 joint_names=joint_names,
-                waypoints=[wp], # List of states
+                waypoints=waypoints, # [Start, Target]
                 duration=2.0, # seconds
                 # Propagate intent for verification
                 max_force_est=chunk.get("estimated_force", 0.0) 
             )
             mapped_chunks.append(traj)
+            
+            # Update "Current" for next chunk (Chain Chunks)
+            if current_joints: 
+                current_joints = {n: v for n, v in zip(joint_names, target_joints)}
             
         return mapped_chunks
 

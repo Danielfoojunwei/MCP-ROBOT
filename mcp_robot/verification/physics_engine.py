@@ -40,23 +40,44 @@ class PhysicsEngine:
         return effective_mass * max(accel, 4.0) # Assume at least 4m/s^2 impacts
 
     @staticmethod
-    def verify_trajectory(trajectory, current_state: Dict) -> Dict:
+    def verify_trajectory(trajectory, current_state: Dict, joint_limits: Dict[str, Tuple[float, float]] = None) -> Dict:
         """
         Validates a JointTrajectoryChunk against physical limits.
         """
-        # 1. Continuity Check
-        pass 
+        # 1. Continuity Check (Anti-Teleportation)
+        # Ensure the trajectory starts near the current robot state.
+        start_wp = trajectory.waypoints[0]
+        current_joints = current_state.get("joints", {})
         
-        # 2. Joint Limit Check (Stateless per waypoint)
-        limits_rad = 3.14 
+        tolerance = 0.5 # Rad tolerance (loose for Sim, tighter for Real)
+        
+        for idx, name in enumerate(trajectory.joint_names):
+            current_val = current_joints.get(name)
+            if current_val is not None:
+                start_val = start_wp.positions[idx]
+                if abs(current_val - start_val) > tolerance:
+                    return {
+                        "valid": False, 
+                        "reason": f"Continuity Error: Joint {name} jumps from {current_val:.2f} to {start_val:.2f}"
+                    }
+        
+        # 2. Joint Limit Check (Configured Limits)
+        # Default symmetric 3.14 if no limits provided
+        default_limit = (-3.14, 3.14)
+        
         for i, wp in enumerate(trajectory.waypoints):
-             # Name mismatch check
              if wp.names != trajectory.joint_names:
                  return {"valid": False, "reason": f"Waypoint {i} joint names mismatch"}
              
              for j_idx, pos in enumerate(wp.positions):
-                 if abs(pos) > limits_rad:
-                      return {"valid": False, "reason": f"Joint {trajectory.joint_names[j_idx]} limit violation: {pos:.2f}"}
+                 j_name = trajectory.joint_names[j_idx]
+                 j_min, j_max = joint_limits.get(j_name, default_limit) if joint_limits else default_limit
+                 
+                 if not (j_min <= pos <= j_max):
+                      return {
+                          "valid": False, 
+                          "reason": f"Joint {j_name} limit violation: {pos:.2f} not in [{j_min}, {j_max}]"
+                      }
 
         # 3. Force Check (Intent Compliance)
         limit_force = 100.0

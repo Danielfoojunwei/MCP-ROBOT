@@ -9,7 +9,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 # Add project root to path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from mrcp.server import mcp
+from mcp_robot.server import mcp
 
 # --- Configuration ---
 MODEL_NAME = "Qwen/Qwen2.5-0.5B-Instruct"

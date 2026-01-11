@@ -8,11 +8,11 @@ from mcp.server.fastmcp import FastMCP
 import mcp.types as types
 
 # Import Real Backend
-from mrcp.pipeline import MRCPUnifiedPipeline
+from mcp_robot.pipeline import MRCPUnifiedPipeline
 
 # Initialize the MCP Server
-print("Initializing Humanoid MCP Server...")
-mcp = FastMCP("MRCP-H Humanoid Control")
+print("Initializing MCP-Robot Server...")
+mcp = FastMCP("MCP-Robot Control")
 
 # Initialize Pipeline
 pipeline = MRCPUnifiedPipeline(robot_id="humanoid_01")

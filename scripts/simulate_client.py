@@ -7,7 +7,7 @@ import os
 # Add project root to path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from mrcp.server import mcp
+from mcp_robot.server import mcp
 
 async def run_client_simulation():
     print("--- Starting Client Simulation ---")

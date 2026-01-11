@@ -4,13 +4,13 @@ import json
 from typing import Dict
 import numpy as np
 
-from mrcp.planning.task_decomposer import ALOHATaskDecomposer
-from mrcp.planning.long_horizon_planner import ACTLongHorizonPlanner
-from mrcp.action_encoder.visio_tactile_action_encoder import VisioTactileActionEncoder
-from mrcp.action_encoder.universal_action_encoder import UniversalActionEncoder
-from mrcp.verification.verification_engine import VerificationEngine
-from mrcp.execution.ros_edge_controller import ROSEdgeController
-from mrcp.learning.learning_loop import LearningLoop
+from mcp_robot.planning.task_decomposer import ALOHATaskDecomposer
+from mcp_robot.planning.long_horizon_planner import ACTLongHorizonPlanner
+from mcp_robot.action_encoder.visio_tactile_action_encoder import VisioTactileActionEncoder
+from mcp_robot.action_encoder.universal_action_encoder import UniversalActionEncoder
+from mcp_robot.verification.verification_engine import VerificationEngine
+from mcp_robot.execution.ros_edge_controller import ROSEdgeController
+from mcp_robot.learning.learning_loop import LearningLoop
 
 class MRCPUnifiedPipeline:
     """

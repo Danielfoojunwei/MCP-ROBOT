@@ -77,6 +77,31 @@ async def stabilize() -> str:
 
 # --- Main Entry Point ---
 
+@mcp.prompt("humanoid-agent-persona")
+def humanoid_agent_persona() -> str:
+    """Returns the DYNAMIC system prompt based on robot state."""
+    # In a real system, we'd read this from the pipeline
+    battery_level = 85 
+    mode = "Collaborative (ISO 10218)"
+    
+    return f"""You are a robot controller for MCP-Robot (Humanoid 01).
+You DO NOT chat. You ONLY output JSON tool calls.
+
+CURRENT STATUS:
+- Battery: {battery_level}%
+- Safety Mode: {mode}
+
+AVAILABLE TOOLS:
+1. submit_task(instruction: str)
+   - Function: Decompose high-level goal into a plan.
+2. execute_chunk(chunk_id: str)
+   - Function: Execute a verified action chunk.
+   - NOTE: This passes through the Tier 5 'Safety Chip' (ZMP + Force Limits).
+
+FORMAT:
+Output ONLY JSON. {"tool": "name", "args": {...}}
+"""
+
 if __name__ == "__main__":
     print("Starting MRCP-H MCP Server...")
     mcp.run()

@@ -49,34 +49,42 @@ class ROSEdgeController:
         # Mock sensor reading
         return {"slip_detected": False, "grip_force": 45.0}
 
-    async def execute_verified_chunk(
-        self,
-        chunk: Dict,
-        verification: Dict
-    ) -> Dict:
+    async def execute_action_chunk(self, chunk_data: Dict) -> Dict:
         """
-        Execute chunk with real-time monitoring and adaptive control.
+        Execute a verified action chunk.
+        Supports Graceful Degradation (Degraded Mode).
         """
+        # Determine Safety Mode
+        safety_status = chunk_data.get("safety_status", "OPTIMAL")
         
-        if verification["status"] != "CERTIFIED":
-            return {"status": "REJECTED", "reason": "Failed verification"}
+        # [OPTIMIZATION] ISO 10218 Force Limiting
+        # Base limit
+        force_limit = 100.0 # N
         
-        # Generate ROS trajectory from chunk waypoints
-        trajectory = self._generate_ros_trajectory(chunk)
+        # DEGRADED MODE: Reduce limits for caution
+        if safety_status == "DEGRADED":
+            force_limit = 50.0 # Clamp to 50%
+            print(f"[Tier 6] ⚠️ DEGRADED MODE: Reducing Force Limit to {force_limit}N")
         
-        # Publish trajectory
-        self.trajectory_pub.publish(trajectory)
+        # Simulation
+        current_force = 50.0 # Mock reading
         
-        # Execution monitoring loop (500Hz = 2ms per cycle)
+        if current_force > force_limit:
+            print(f"[Tier 6] ⚠️ Force Limiter Active: Clamping force from {current_force} to {force_limit}")
+            current_force = force_limit
+            
+        # Publish
+        msg = f"CMD_SERVO:{chunk_data.get('id', 'ukn')}:FORCE:{current_force}:MODE:{safety_status}"
+        self.force_pub.publish(msg) # Corrected publisher name
         execution_log = {
-            "chunk_id": chunk["id"],
+            "chunk_id": chunk_data["id"],
             "start_time": time.time(),
             "tactile_events": [],
             "force_corrections": [],
             "success": False
         }
         
-        chunk_duration = chunk.get("duration_s", (50 / 30))
+        chunk_duration = chunk_data.get("duration_s", (50 / 30))
         t_start = time.time()
         
         # Simulating control loop
@@ -86,7 +94,7 @@ class ROSEdgeController:
             slip_detected = current_tactile["slip_detected"]
             
             # Adaptive force control logic
-            if slip_detected and chunk.get("is_tactile_critical", False):
+            if slip_detected and chunk_data.get("is_tactile_critical", False):
                 new_force = current_tactile["grip_force"] * 1.1
                 execution_log["tactile_events"].append({
                     "time": time.time() - t_start,

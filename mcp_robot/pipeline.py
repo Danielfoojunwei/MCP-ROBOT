@@ -107,21 +107,25 @@ class MRCPUnifiedPipeline:
         if not chunk_data:
              return {"status": "ERROR", "reason": f"Chunk {chunk_id} not found."}
 
-        # Tier 5: Verification
         camera_frame = np.zeros((224,224,3))
         current_tactile = {"grip_force": 0, "slip_detected": False}
         
+        # Tier 5: Verification (Safety Chip)
         verification = await self.tier5_verifier.verify_chunk(
             chunk=chunk_data,
             camera_frame=camera_frame,
             tactile_current=current_tactile
         )
         
-        if verification["status"] != "CERTIFIED":
-            return {"status": "REJECTED", "reason": verification}
-
+        if not verification["safe"]:
+            return {"status": "rejected", "reason": verification.get("errors", ["Unknown Safety Violation"])}
+        
+        # Inject Safety Status (OPTIMAL/DEGRADED) for Tier 6
+        chunk_data["safety_status"] = verification.get("status", "OPTIMAL")
+            
         # Tier 6: Execution
-        result = await self.tier6_controller.execute_verified_chunk(chunk_data, verification)
+        # Pass the SAFE chunk to the edge controller
+        result = await self.tier6_controller.execute_action_chunk(chunk_data)
         
         # Tier 7: Learning
         await self.tier7_learner.process_execution_telemetry(chunk_data, result, camera_frame)

@@ -105,6 +105,34 @@ The system, driven by **Qwen2.5-0.5B**, achieved **100% Success** on reasoning t
 
 > **Note**: While the Agent failed the safety stress test policy (choosing execution without planning), the **Tier 5 Safety Chip** successfully prevented hardware damage in all cases, proving the "Safety Chip" architecture works as a fail-safe.
 
+## 🧠 Prompt Engineering Optimization
+
+To resolve the **Safety Stress** failure, we implemented a systematic "Thought-Action" optimization loop. 
+
+### Optimization Results: 40% → 100% Pass Rate
+We observed a massive jump in reliability by forcing the model to deliberate before outputting JSON commands.
+
+![Prompt Optimization Comparison](viz_output/prompt_optimization_compare.png)
+
+### The "Thought-Action" Pattern
+Instead of raw JSON, the agent now follows a strict internal reasoning chain:
+
+```mermaid
+graph TD
+    A[User Instruction] --> B{Thought Step}
+    B -->|Is it a new command?| C[submit_task]
+    B -->|Is a plan ready?| D[execute_chunk]
+    C --> E[JSON Output]
+    D --> E
+```
+
+**Example Trace:**
+> **User**: "Run forward quickly!"
+> **Agent**: 
+> *   **Thought**: This is a new command. Even though it's urgent, I must plan it first.
+> *   **JSON**: `{"tool": "submit_task", "args": {"instruction": "run forward quickly"}}`
+
+
 
 ## 📜 License
 

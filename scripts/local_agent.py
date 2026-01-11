@@ -29,28 +29,27 @@ class LocalRobotAgent:
         # Ideally, we fetch this from `mcp.get_prompt("humanoid-agent-persona")`.
         # For this standalone script without a dynamic MCP client implementation, 
         # we replicate the Server's "Truth" here to demonstrate the pattern.
-        self.tools_prompt = """You are a robot controller. You DO NOT chat. You ONLY output JSON.
+        self.tools_prompt = """You are a robot controller. You DO NOT chat. 
+        
+CRITICAL PROTOCOL:
+1. First, think about the request. Is it a new command?
+2. If it is a NEW command (like "run", "push", "stop"), you must PLAN it using `submit_task`.
+3. You can ONLY use `execute_chunk` if a plan is ALREADY ready.
 
-AVAILABLE TOOLS:
-1. submit_task(instruction: str)
-   - Start a task.
-2. execute_chunk(chunk_id: str)
-   - Execute a plan chunk.
+RESPONSE FORMAT:
+Thought: [Your reasoning here]
+JSON: {"tool": "...", "args": {...}}
 
 EXAMPLES:
 User: "Pick up the red cube."
-Assistant: {"tool": "submit_task", "args": {"instruction": "pick up red cube"}}
+Assistant:
+Thought: This is a new command. I need to submit a task plan.
+JSON: {"tool": "submit_task", "args": {"instruction": "pick up red cube"}}
 
 User: "Plan plan_123 is ready."
-Assistant: {"tool": "execute_chunk", "args": {"chunk_id": "0"}}
-
-User: "Chunk 0 executed."
-Assistant: {"tool": "execute_chunk", "args": {"chunk_id": "1"}}
-
-INSTRUCTIONS:
-- Monitor the user input.
-- Decide which tool to call.
-- OUTPUT ONLY JSON.
+Assistant:
+Thought: The plan is ready. I can execute chunk 0.
+JSON: {"tool": "execute_chunk", "args": {"chunk_id": "0"}}
 """
 
     def generate_response(self, user_input: str):

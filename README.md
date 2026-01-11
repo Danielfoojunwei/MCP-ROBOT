@@ -1,21 +1,24 @@
+# MCP-Robot (Humanoid Research Platform)
 
-# MCP-Robot: Agentic Humanoid Control
-
-**MCP-Robot** (formerly MRCP-H) is an agentic control framework that enables Large Language Models (LLMs) to safely control humanoid robots. It bridges the gap between high-level semantic reasoning and low-level whole-body control using the **Model Context Protocol (MCP)**.
-
-![Architecture Status](https://img.shields.io/badge/Architecture-7--Tier-blue)
-![Agent](https://img.shields.io/badge/Agent-Local_Qwen_0.5B-green)
-![Safety](https://img.shields.io/badge/Safety-ZMP_Verification-red)
+**MCP-Robot** is an empirical research platform for evaluating **Vision-Language-Action (VLA)** models using the **Model Context Protocol (MCP)**. It integrates a local Large Language Model (e.g., Qwen2.5-0.5B, SmolLM2) with a simulated 7-Tier Humanoid Control Pipeline to demonstrate autonomous task planning and execution.
 
 ## 🚀 Key Features
 
-*   **7-Tier Architecture**: A robust pipeline from Task Decomposition (ALOHA) to Hardware Execution (ROS2).
-*   **MCP Integration**: Exposes robot capabilities as standard **MCP Tools** (`submit_task`, `execute_chunk`) and **Resources** (`humanoid://balance`).
-*   **Safety-First**: Includes a **Tier 5 Verification Engine** that checks ZMP (Zero Moment Point) stability and tactile slip risks *before* execution.
-*   **Local Agent**: Includes a fully autonomous local agent using **Qwen2.5-0.5B** that runs on your CPU, ensuring privacy and zero latency.
-*   **Live Visualization**: Generates dashboards correlating execution timeline with stability metrics.
+*   **Model Context Protocol (MCP)**: Implements a full `HumanoidMCPServer` exposing tools (`submit_task`, `execute_chunk`) and resources (`robot://status`) to any MCP Client (Claude Desktop, Cursor, Local Agents).
+*   **7-Tier Architecture**: A complete "Mind-to-Motion" pipeline inspired by ALOHA/ACT/UMI:
+    *   **Tier 1**: Task Decomposition (LLM-based)
+    *   **Tier 2**: Long-Horizon Planning (Transformer-based keyframes)
+    *   **Tier 3**: Visio-Tactile Encoding (Fusion Models)
+    *   **Tier 4**: Universal Action Mapping (Hardware Agnostic)
+    *   **Tier 5**: **Verification Engine ("Safety Chip")**
+    *   **Tier 6**: Execution (ROS2 Edge Controller)
+    *   **Tier 7**: Self-Correction Learning Loop
+*   **Autonomous Agent**: Includes `local_agent.py`, a script that uses a small local LLM to drive the robot via MCP tool calls.
+*   **Validated Resilience**: built-in ZMP Stability checks and ISO 10218 Force verification.
 
-## 🛠️ Installation
+## 📦 Installation
+
+Prerequisites: Python 3.10+, `pip`.
 
 1.  **Clone the repository**:
     ```bash
@@ -25,22 +28,29 @@
 
 2.  **Install Dependencies**:
     ```bash
-    pip install mcp transformers torch matplotlib numpy
+    pip install mcp numpy torch transformers matplotlib
     ```
+
+    *Note: For the local agent, you will need a GPU-enabled PyTorch installation for best performance, though it runs on CPU.*
 
 ## 🏃 Usage
 
-### 1. Run the MCP Server (Standalone)
+### 1. Start the MCP Server
+This stands up the robot's "brain" and control pipeline.
 ```bash
 python mcp_robot/server.py
 ```
+*Output: `Starting MRCP-H MCP Server...`*
 
-### 2. Run the Autonomous Local Agent
+### 2. Run the Autonomous Agent
+In a separate terminal, run the local LLM agent. It will connect (simulated), load the `Qwen` model, and you can give it commands.
 ```bash
 python scripts/local_agent.py
 ```
-*   **Input**: "Pick up the red cube from the table."
-*   **Behavior**: The agent will autonomously download the model, connect to the pipeline, plan the task, and execute safe chunks.
+*Example Interaction:*
+> **User**: "Clean the table by picking up the coke can."
+> **Agent**: *Thinking...* `{"tool": "submit_task", "args": {"instruction": "pick up coke can"}}`
+> **Server**: *Verifies action -> Executes -> Returns success.*
 
 ### 3. Generate Visualization Dashboard
 ```bash

@@ -115,11 +115,11 @@ class VerificationEngine:
         """
         print("[Tier 5] Running Safety Chip Verification...")
         
-        # Prepare chunk_data for SafetyChip (mocking some values for demonstration)
+        # Prepare chunk_data for SafetyChip (reading actual telemetry/predictions)
         chunk_data_for_safety_chip = {
             "id": chunk.get("id", "unknown"),
-            "stability_score": chunk.get("predicted_stability_score", 0.6), # Example
-            "estimated_force": chunk.get("predicted_max_force", 50.0) # Example
+            "stability_score": chunk.get("stability_score", chunk.get("predicted_stability_score", 0.6)),
+            "estimated_force": chunk.get("estimated_force", chunk.get("predicted_max_force", 50.0))
         }
         
         safety_chip_result = self.safety_chip.verify(chunk_data_for_safety_chip)
@@ -129,6 +129,7 @@ class VerificationEngine:
             return {
                 "chunk_id": chunk["id"],
                 "status": "UNSAFE",
+                "safe": False,
                 "safety_chip": safety_chip_result,
                 "certified_at": time.time(),
                 "predicted_success_rate": 0.0 # Failed safety check

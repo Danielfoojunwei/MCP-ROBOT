@@ -4,20 +4,28 @@ import asyncio
 from typing import List, Dict
 
 # Mock Loaders
+# Deterministic Encoders for Research Reproducibility
 def load_vision_encoder():
-    class MockVis:
-         def encode(self, frame): return np.random.rand(256)
-    return MockVis()
+    class DeterministicVis:
+         def encode(self, frame): 
+             # Use mean of frame to create a semi-semantic but stable embedding
+             return np.full(256, np.mean(frame) if frame is not None else 0.5)
+    return DeterministicVis()
 
 def load_task_embedder():
-    class MockEmb:
-        def encode(self, text): return np.random.rand(256)
-    return MockEmb()
+    class DeterministicEmb:
+        def encode(self, text): 
+            # Simple hash-based embedding
+            val = sum(ord(c) for c in text) % 256 / 256.0
+            return np.full(256, val)
+    return DeterministicEmb()
 
 class TransformerDecoderForPlanning:
     def predict(self, vision, task, subtask_spec, num_chunks):
-        # Return random latent vectors
-        return [np.random.rand(64) for _ in range(num_chunks)]
+        # Return deterministic latents derived from vision + task + spec
+        # This replaces the purely random simulation and ensures consistency across runs.
+        seed_val = np.mean(vision) + np.mean(task) + np.mean(subtask_spec)
+        return [np.full(64, (seed_val + i*0.1) % 1.0) for i in range(num_chunks)]
 
 class ACTLongHorizonPlanner:
     """
@@ -117,13 +125,17 @@ class ACTLongHorizonPlanner:
     
     def _encode_subtask(self, subtask: Dict) -> np.ndarray:
         """Encode subtask specification as vector."""
-        return np.random.rand(32) # Mock
+        # Map task type to a unique float for the transformer seed
+        type_map = {"walk_to": 0.1, "pick": 0.2, "place": 0.3, "scan": 0.4}
+        val = type_map.get(subtask.get("type", "unknown"), 0.5)
+        return np.full(32, val)
     
     def _decode_positions(self, latent: np.ndarray) -> List[List[float]]:
-        # Mock: 50 waypoints per chunk, 3 dimensions (x,y,z normalized 0-1)
-        # For a walker, this would include leg positions too, but simplifying here.
-        return np.random.rand(50, 3).tolist()
+        # Deterministic: 50 waypoints per chunk
+        # Creates a smooth movement trajectory starting from 'latent' seed
+        base_x, base_y, base_z = latent[0]*0.5, latent[1]*0.5, latent[2]*0.5
+        return [[base_x + i*0.005, base_y, base_z] for i in range(50)]
 
     def _decode_forces(self, latent: np.ndarray) -> List[float]:
-        # Mock: 50 force values
-        return np.random.rand(50).tolist()
+        # Deterministic force profile
+        return [latent[3] * 20.0 for _ in range(50)]

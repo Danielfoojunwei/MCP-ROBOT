@@ -19,11 +19,19 @@ pipeline = MRCPUnifiedPipeline(robot_id="humanoid_01")
 
 # --- Resources ---
 
+@mcp.resource("robot://status")
+def get_overall_status() -> str:
+    """Get overall robot system status."""
+    return json.dumps({
+        "robot_id": pipeline.robot_id,
+        "mode": "COLLABORATIVE",
+        "battery": 85,
+        "is_stabilized": True
+    }, indent=2)
+
 @mcp.resource("humanoid://{id}/balance")
 def get_balance_telemetry(id: str) -> str:
     """Get real-time balance stability metrics (ZMP, CoP, CoM)."""
-    # In a real app, this would query the robot hardware bridge directly
-    # or the Pipeline's latest state cache.
     return json.dumps({
         "zmp": {"x": 0.01, "y": -0.02}, 
         "status": "STABLE"
@@ -57,14 +65,14 @@ async def submit_task(instruction: str) -> str:
     return json.dumps(summary, indent=2)
 
 @mcp.tool()
-async def execute_chunk(chunk_id: str) -> str:
+async def execute_chunk(plan_id: str, chunk_id: str) -> str:
     """
     TIER 6: Execute a specific action chunk on the hardware.
-    CRITICAL: This tool performs TIER 5 Verification (Safety/Stability) first.
+    CRITICAL: Requires both plan_id and chunk_id to prevent ambiguity.
     """
-    logging.info(f"Request to execute chunk: {chunk_id}")
+    logging.info(f"Request to execute chunk: {chunk_id} for plan: {plan_id}")
     
-    result = await pipeline.execute_specific_chunk(chunk_id)
+    result = await pipeline.execute_specific_chunk(plan_id, chunk_id)
     return json.dumps(result, indent=2)
 
 @mcp.tool()
@@ -94,12 +102,13 @@ CURRENT STATUS:
 AVAILABLE TOOLS:
 1. submit_task(instruction: str)
    - Function: Decompose high-level goal into a plan.
-2. execute_chunk(chunk_id: str)
+2. execute_chunk(plan_id: str, chunk_id: str)
    - Function: Execute a verified action chunk.
+   - NOTE: You MUST provide the plan_id from the previous tool output.
    - NOTE: This passes through the Tier 5 'Safety Chip' (ZMP + Force Limits).
 
 FORMAT:
-Output ONLY JSON. {"tool": "name", "args": {...}}
+Output ONLY JSON: {{"tool": "name", "args": {{...}}}}
 """
 
 if __name__ == "__main__":

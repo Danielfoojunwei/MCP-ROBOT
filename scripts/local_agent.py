@@ -33,8 +33,8 @@ class LocalRobotAgent:
         
 CRITICAL PROTOCOL:
 1. First, think about the request. Is it a new command?
-2. If it is a NEW command (like "run", "push", "stop"), you must PLAN it using `submit_task`.
-3. You can ONLY use `execute_chunk` if a plan is ALREADY ready.
+2. If it is a NEW command (even if it seems simple like "move", "run", "push", "stop"), you MUST call `submit_task` FIRST to generate a plan.
+3. You can ONLY use `execute_chunk` if a plan is ALREADY ready (e.g., User says "Plan ready" or "Chunk executed").
 
 RESPONSE FORMAT:
 Thought: [Your reasoning here]
@@ -110,9 +110,11 @@ JSON: {"tool": "execute_chunk", "args": {"chunk_id": "0"}}
         print(f"[Agent] AI Response: {response}")
         
         try:
-            tool_data = json.loads(response)
-        except:
-            return {"success": False, "reason": "invalid_json"}
+            tool_data = self._parse_json(response)
+            if not tool_data:
+                 return {"success": False, "reason": "could_not_extract_json"}
+        except Exception as e:
+            return {"success": False, "reason": f"parsing_error: {e}"}
             
         if "tool" not in tool_data:
              return {"success": False, "reason": "no_tool_field"}

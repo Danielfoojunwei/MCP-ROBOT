@@ -5,8 +5,21 @@ from typing import List, Dict
 # Mock IK Solver
 class IKSolver:
     def solve(self, world_pos):
-        # Return 7 joint angles + grippers (depends on robot)
-        return [0.0, -1.57, 0.0, -1.57, 0.0, 0.0, 0.0]
+        """
+        Simple Pseudo-IK for a humanoid leg/arm chain.
+        Varies joints based on XYZ to provide functional feedback to Tiers 5/6.
+        """
+        x, y, z = world_pos
+        # This provides a deterministic mapping so Tiers 5/6 can observe movement
+        return [
+            np.clip(x * 1.5, -0.5, 0.5),      # hip_yaw
+            np.clip(y * 1.5, -0.3, 0.3),      # hip_roll
+            np.clip((z - 0.5) * 2.0, -1.0, 1.0), # hip_pitch
+            np.clip(-z * 2.5, -2.0, 0.0),     # knee_pitch
+            np.clip(z * 1.2, -0.5, 0.5),      # ankle_pitch
+            np.clip(y * 0.8, -0.3, 0.3),      # ankle_roll
+            0.0                               # extra/gripper
+        ]
 
 class UniversalActionEncoder:
     """

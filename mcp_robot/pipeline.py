@@ -88,7 +88,7 @@ class MRCPUnifiedPipeline:
         self.active_plans[plan_id] = plan_data
         return plan_data
 
-    async def execute_specific_chunk(self, chunk_id: str, plan_id: str = None) -> Dict:
+    async def execute_specific_chunk(self, plan_id: str, chunk_id: str) -> Dict:
         """
         Orchestrates Tier 5, 6, 7 for a single chunk.
         """

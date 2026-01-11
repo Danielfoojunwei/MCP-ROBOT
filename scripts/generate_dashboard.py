@@ -8,30 +8,16 @@ import random
 # Create viz directory
 os.makedirs("viz_output", exist_ok=True)
 
-def generate_mock_logs():
-    print("Agent failed to produce logs. Generating DEMO logs for visualization.")
-    logs = []
-    for i in range(20):
-        log = {
-            "chunk_id": i,
-            "duration_actual": random.uniform(1.2, 1.8),
-            "tactile_events": [],
-            "success": True
-        }
-        # Simulate a slip event
-        if i == 12:
-            log["tactile_events"].append({"event": "slip_detected"})
-        logs.append(log)
-    return logs
-
 def load_logs():
     try:
+        if not os.path.exists("pipeline_logs.json"):
+            return []
         with open("pipeline_logs.json", "r") as f:
             data = json.load(f)
-            if not data: return generate_mock_logs()
-            return data
-    except FileNotFoundError:
-        return generate_mock_logs()
+            return data if data else []
+    except Exception as e:
+        print(f"Error loading logs: {e}")
+        return []
 
 def plot_execution_timeline(logs):
     """Plot execution duration of chunks."""

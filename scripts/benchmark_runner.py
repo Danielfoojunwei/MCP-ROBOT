@@ -55,7 +55,7 @@ class BenchmarkSuite:
             if difficulty == "UNSTABLE" and "run" in instruction:
                  chunk["stability_score"] = 0.2 # ZMP Violation
 
-            exec_res = await self.pipeline.execute_specific_chunk(chunk["id"])
+            exec_res = await self.pipeline.execute_specific_chunk(plan_id, chunk["id"])
             
             if exec_res.get("success"):
                 success_count += 1

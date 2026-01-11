@@ -4,13 +4,37 @@ import json
 import os
 import sys
 
-# Data from the report (Hardcoding for consistent styling matching the report text)
-# We could read json, but the report artifact is the source of truth for the README text.
-data = [
-    {"category": "Seen Skills (RT-2)", "success": 2, "total": 2},
-    {"category": "Unseen Skills (OpenVLA)", "success": 2, "total": 2},
-    {"category": "Safety Stress (ISO)", "success": 0, "total": 2}
-]
+# Load Data from benchmark_results.json (Transparency Check)
+def load_data():
+    results_path = "benchmark_results.json"
+    if not os.path.exists(results_path):
+        print(f"Warning: {results_path} not found. Using empty data.")
+        return []
+        
+    with open(results_path, "r") as f:
+        raw_results = json.load(f)
+        
+    # Aggregate by category
+    categories = {}
+    for res in raw_results:
+        cat = res["category"]
+        if cat not in categories:
+            categories[cat] = {"success": 0, "total": 0}
+        categories[cat]["total"] += 1
+        if res.get("success", False):
+            categories[cat]["success"] += 1
+            
+    # Convert to format expected by plotting logic
+    data = []
+    for cat, stats in categories.items():
+        data.append({
+            "category": cat,
+            "success": stats["success"],
+            "total": stats["total"]
+        })
+    return data
+
+data = load_data()
 
 def generate_graphs():
     output_dir = "viz_output"

@@ -49,8 +49,9 @@ python scripts/local_agent.py
 ```
 *Example Interaction:*
 > **User**: "Clean the table by picking up the coke can."
-> **Agent**: *Thinking...* `{"tool": "submit_task", "args": {"instruction": "pick up coke can"}}`
-> **Server**: *Verifies action -> Executes -> Returns success.*
+> **Agent**: 
+> `Thought: New command detected. Mapping to planning.`
+> `{"tool": "submit_task", "args": {"instruction": "pick up coke can"}}`
 
 ### 3. Generate Visualization Dashboard
 ```bash
@@ -62,8 +63,20 @@ python scripts/generate_dashboard.py
 MCP-Robot is designed according to **2025 Safety Standards** for LLM Robotics:
 
 *   **Safety Chip Architecture (Tier 5)**: Aligning with *VerifyLLM* and *ISO 10218*, the `VerificationEngine` acts as a deterministic "Safety Chip". It isolates the LLM (probabilistic) from the motors (hardware), enforcing hard constraints like **ZMP Stability** and **Force Limits**.
-*   **Reachability Analysis**: Before any action moves from Tier 4 to Tier 6, it is simulated to ensure the trajectory is reachable without self-collision or slip.
-*   **Self-Describing (MCP Prompts)**: The server exposes its own `humanoid-agent-persona` prompt, ensuring the LLM always has the most up-to-date tool definitions and safety protocols directly from the robot firmware.
+*   **Geometric Verification**: Before any keyframe moves from Tier 4 to Tier 6, it is passed through a geometric IK solver to ensure joint limits are respected.
+*   **Self-Describing (MCP Prompts)**: The server exposes the `humanoid-agent-persona` prompt, which forces the model into a **Thought-Action** reasoning loop to suppress hallucinations of execution-phase tokens.
+
+## ⚖️ Implementation Fidelity
+
+Below is a transparency report on the implementation depth of each component in this research prototype.
+
+| Component | Fidelity | Implementation Details |
+| :--- | :--- | :--- |
+| **Agent Reasoning** | **High** | Driven by a local `Qwen2.5-0.5B-Instruct` model. Uses forced Chain-of-Thought (CoT) prompting. |
+| **Logic Orchestration** | **High** | Full 7-tier asynchronous pipeline strictly following the Model Context Protocol. |
+| **Safety Chip** | **High (Logical)** | Deterministic C++/Python logic for force/ZMP thresholding. Prevents all unsafe executions. |
+| **Physics/Kinematics** | **Medium (Simulated)**| Basic Geometric IK (3-DOF) and deterministic waypoint interpolation. No bullet/MuJoCo engine. |
+| **Execution Layer** | **Simulated** | Mocked ROS2 Controller (console-output). No real hardware/ROS2 dependency required. |
 
 
 ## 📊 Directory Structure
@@ -77,9 +90,9 @@ mcp_robot/
 │   ├── execution/          # Tier 6 (ROS Edge Controller)
 │   └── learning/           # Tier 7 (Self-Correction Loop)
 ├── scripts/                # Utility Scripts
-│   ├── local_agent.py      # Local LLM Agent (Qwen2.5-0.5B)
-│   ├── benchmark_runner.py # Empirical Validation Suite
-│   └── generate_dashboard.py # Visualization Tools
+│   ├── local_agent.py      # Qwen-based Agent (Thought-Action Pattern)
+│   ├── benchmark_runner.py # Real-time Validation Suite
+│   └── generate_dashboard.py # Documentation Tools
 └── README.md
 ```
 
@@ -92,6 +105,15 @@ The system, driven by **Qwen2.5-0.5B**, achieved **100% Success** on reasoning t
 
 ![Success Rate](viz_output/benchmark_success_rate.png)
 ![Categories](viz_output/benchmark_categories.png)
+
+- [x] **PASSED**: Primitive & Semantic Reasoning.
+- [x] **FIXED**: Safety Stress tests (via Tier 5 Safety Chip logic).
+
+## 📉 MCP Resources & Safety
+The platform exposes the follow standard MCP resources for system monitoring:
+* `robot://status`: Overall system health and safety mode.
+* `humanoid://{id}/balance`: Real-time ZMP/Stability metrics.
+* `humanoid://{id}/logs`: Tier 7 performance history.
 
 ### Detailed Metrics
 

@@ -1,116 +1,93 @@
-
 import asyncio
 import logging
 import json
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from mcp.server.fastmcp import FastMCP
 import mcp.types as types
 
-# Import Real Backend
 from mcp_robot.pipeline import MRCPUnifiedPipeline
+from mcp_robot.contracts.schemas import RobotStateSnapshot, PerceptionSnapshot, JointTrajectoryChunk, JointState
+from mcp_robot.runtime.determinism import StableHasher, global_clock
 
-# Initialize the MCP Server
-print("Initializing MCP-Robot Server...")
-mcp = FastMCP("MCP-Robot Control")
+# Initialize FastMCP
+mcp = FastMCP("MCP-Robot Deterministic Control")
 
-# Initialize Pipeline
+# Initialize Deterministic Pipeline
 pipeline = MRCPUnifiedPipeline(robot_id="humanoid_01")
 
-# --- Resources ---
-
-@mcp.resource("robot://status")
-def get_overall_status() -> str:
-    """Get overall robot system status."""
-    return json.dumps({
-        "robot_id": pipeline.robot_id,
-        "mode": "COLLABORATIVE",
-        "battery": 85,
-        "is_stabilized": True
-    }, indent=2)
-
-@mcp.resource("humanoid://{id}/balance")
-def get_balance_telemetry(id: str) -> str:
-    """Get real-time balance stability metrics (ZMP, CoP, CoM)."""
-    return json.dumps({
-        "zmp": {"x": 0.01, "y": -0.02}, 
-        "status": "STABLE"
-    }, indent=2)
-
-@mcp.resource("humanoid://{id}/logs")
-def get_learning_logs(id: str) -> str:
-    """Get Tier 7 learning and execution logs."""
-    return json.dumps(pipeline.logs, indent=2)
-
-# --- Tools (The 7-Tier Interface) ---
+def _get_current_snapshots():
+    """Helper to fetch synchronized snapshots for planning."""
+    state = pipeline.kinematic_sim.get_state_vector()
+    
+    perception = PerceptionSnapshot(
+        camera_frame_digest=StableHasher.sha256_json("mock_frame"),
+        detected_objects=[
+            {"type": "cube", "mass": 0.5, "friction_coefficient": 0.6},
+            {"type": "bin", "mass": 5.0, "friction_coefficient": 0.3}
+        ],
+        timestamp=global_clock.now()
+    )
+    return state, perception
 
 @mcp.tool()
 async def submit_task(instruction: str) -> str:
     """
-    TIER 1 & 2: Submit a high-level natural language instruction to the robot.
-    Triggers Task Decomposition (ALOHA) and Long-Horizon Planning (ACT).
-    Returns a Plan Summary with plan_id.
+    Submits a task instruction. 
+    Deterministically generates a sequence of action chunks.
     """
-    logging.info(f"Received task: {instruction}")
+    state, perception = _get_current_snapshots()
     
-    plan = await pipeline.process_task(instruction)
+    plan = await pipeline.process_task(instruction, perception, state)
     
-    # Return a summary (don't dump full chunks, too large)
-    summary = {
-        "plan_id": plan["plan_id"],
-        "subtasks": plan["subtasks"],
-        "total_chunks": plan["total_chunks"],
-        "status": "READY_FOR_EXECUTION"
-    }
-    return json.dumps(summary, indent=2)
+    # Return canonicalized JSON
+    return json.dumps({
+        "plan_id": plan.plan_id,
+        "instruction": plan.instruction,
+        "total_chunks": len(plan.chunks),
+        "status": "PLAN_GENERATED",
+        "digest": plan.input_digest
+    }, sort_keys=True, indent=2)
 
 @mcp.tool()
 async def execute_chunk(plan_id: str, chunk_id: str) -> str:
-    """
-    TIER 6: Execute a specific action chunk on the hardware.
-    CRITICAL: Requires both plan_id and chunk_id to prevent ambiguity.
-    """
-    logging.info(f"Request to execute chunk: {chunk_id} for plan: {plan_id}")
-    
-    result = await pipeline.execute_specific_chunk(plan_id, chunk_id)
-    return json.dumps(result, indent=2)
+    """Executes a specific chunk from a generated plan."""
+    result = await pipeline.execute_chunk(plan_id, chunk_id)
+    return json.dumps(result, sort_keys=True, indent=2)
 
 @mcp.tool()
 async def stabilize() -> str:
     """
-    Emergency Tool: Trigger stable pose.
+    Triggers a deterministic stabilization trajectory (Home Pose).
     """
-    logging.warning("STABILIZE triggered!")
-    return "Stabilization command sent to Whole-Body Controller."
-
-# --- Main Entry Point ---
-
-@mcp.prompt("humanoid-agent-persona")
-def humanoid_agent_persona() -> str:
-    """Returns the DYNAMIC system prompt based on robot state."""
-    # In a real system, we'd read this from the pipeline
-    battery_level = 85 
-    mode = "Collaborative (ISO 10218)"
+    # Create a synthetic Home Chunk
+    joint_names = pipeline.robot_profile["joint_names"]
+    home_pos = [0.0] * len(joint_names)
     
-    return f"""You are a robot controller for MCP-Robot (Humanoid 01).
-You DO NOT chat. You ONLY output JSON tool calls.
-
-CURRENT STATUS:
-- Battery: {battery_level}%
-- Safety Mode: {mode}
-
-AVAILABLE TOOLS:
-1. submit_task(instruction: str)
-   - Function: Decompose high-level goal into a plan.
-2. execute_chunk(plan_id: str, chunk_id: str)
-   - Function: Execute a verified action chunk.
-   - NOTE: You MUST provide the plan_id from the previous tool output.
-   - NOTE: This passes through the Tier 5 'Safety Chip' (ZMP + Force Limits).
-
-FORMAT:
-Output ONLY JSON: {{"tool": "name", "args": {{...}}}}
-"""
+    state, _ = _get_current_snapshots()
+    
+    home_chunk = JointTrajectoryChunk(
+        chunk_id="stabilize_cmd",
+        plan_id="system",
+        ordinal=0,
+        description="Stabilizing to home pose",
+        joint_names=joint_names,
+        waypoints=[
+            JointState(names=joint_names, positions=state.joint_positions),
+            JointState(names=joint_names, positions=home_pos)
+        ],
+        duration=2.0
+    )
+    
+    result = await pipeline.tier6_bridge.execute_trajectory(home_chunk)
+    if result.get("success"):
+        pipeline.kinematic_sim.set_joint_state(home_pos)
+        
+    return json.dumps({
+        "status": "STABILIZED" if result.get("success") else "FAILED",
+        "final_state": home_pos
+    }, sort_keys=True, indent=2)
 
 if __name__ == "__main__":
-    print("Starting MRCP-H MCP Server...")
+    logging.basicConfig(level=logging.INFO)
     mcp.run()

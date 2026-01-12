@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mcp-robot"
+version = "2.0.0"
+description = "Deterministic production-grade MCP robot control stack"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy",
+    "pydantic>=2.0.0",
+    "asyncio",
+    "mcp"
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+    "mypy",
+    "ruff"
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["mcp_robot*", "scripts*"]

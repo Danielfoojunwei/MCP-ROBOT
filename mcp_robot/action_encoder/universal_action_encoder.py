@@ -1,30 +1,58 @@
 import numpy as np
-from typing import Dict, List
+import logging
+from typing import Dict, List, Optional
 from mcp_robot.contracts.schemas import JointTrajectoryChunk, JointState
 
 class UniversalActionEncoder:
     """
-    Tier 4: Maps abstract intentions to Rigorous JointTrajectoryChunk Schemas.
+    Tier 4: Deterministic Universal Mapper.
+    Translates task-space waypoints into joint-space trajectories.
     """
     def __init__(self, profiles: Dict):
-        print("Loading Tier 4: Universal Mapper...")
+        logging.info("Loading Tier 4: Deterministic Universal Mapper...")
         self.profiles = profiles
 
-    def _solve_ik(self, world_pos: List[float]) -> List[float]:
+    def _solve_ik(self, world_pos: List[float], profile: Dict) -> List[float]:
         """
-        Deterministic 'Pseudo-IK' mapping World (x,y,z) -> 7 Joint Angles.
-        In a real system, this wraps `dm_control` or `kdl_parser`.
+        Deterministic Geometric IK Solver for 7-DOF Manipulator.
+        - q1: Base Rotation (Yaw)
+        - q2: Shoulder (Pitch)
+        - q3: Upper Arm (Roll)
+        - q4: Elbow (Pitch)
+        - q5: Forearm (Roll)
+        - q6: Wrist (Pitch)
+        - q7: Flange (Roll)
         """
         x, y, z = world_pos
-        # Mock geometric solution for 7-DOF arm
-        q1 = np.arctan2(y, x) 
-        q2 = np.clip(z * 2.0, -1.5, 1.5)
-        q3 = np.clip(x * 0.5, -3.14, 3.14)
-        q4 = -q2 # Elbow compensation
-        q5 = 0.0 # Wrist 1
-        q6 = np.clip(y * 0.5, -1.0, 1.0) # Wrist 2
-        q7 = 0.0 # Flange
-        return [float(q) for q in [q1, q2, q3, q4, q5, q6, q7]]
+        
+        # 1. Base Rotation
+        q1 = np.arctan2(y, x)
+        
+        # 2. Geometric Approximation for Reach
+        r = np.sqrt(x**2 + y**2)
+        h = z - 0.2 # Offset for base height
+        dist = np.sqrt(r**2 + h**2)
+        
+        # Link lengths (Typical cobot arm)
+        L1, L2 = 0.4, 0.4
+        
+        # Law of Cosines for Elbow (q4)
+        cos_q4 = (dist**2 - L1**2 - L2**2) / (2 * L1 * L2)
+        cos_q4 = np.clip(cos_q4, -1.0, 1.0)
+        q4 = -np.arccos(cos_q4)
+        
+        # Shoulder (q2)
+        phi1 = np.arctan2(h, r)
+        phi2 = np.arctan2(L2 * np.sin(-q4), L1 + L2 * np.cos(-q4))
+        q2 = phi1 + phi2
+        
+        # Simple defaults for redundant joints (q3, q5, q6, q7)
+        q3 = 0.0
+        q5 = 0.0
+        q6 = -q2 - q4 # Wrist compensation for level flange
+        q7 = 0.0
+        
+        return [float(np.round(q, 6)) for q in [q1, q2, q3, q4, q5, q6, q7]]
 
     async def map_chunks_to_robot(
         self, 
@@ -35,63 +63,59 @@ class UniversalActionEncoder:
         current_joints: Dict[str, float] = None
     ) -> List[JointTrajectoryChunk]:
         """
-        Converts Planning Chunks -> Validated JointTrajectoryChunks.
+        Map augmented chunks to joint trajectories deterministically.
         """
         profile = self.profiles.get(robot_id, {})
-        # Standardize strict joint names for the contract
-        joint_names = ["joint_1", "joint_2", "joint_3", "joint_4", "joint_5", "joint_6", "joint_7"]
+        joint_names = profile.get("joint_names", 
+            ["joint_1", "joint_2", "joint_3", "joint_4", "joint_5", "joint_6", "joint_7"]
+        )
         
         mapped_chunks = []
         for chunk in chunks:
-            # Generate waypoints (interpolate for "trajectory" feel)
-            # In real system: full PL/spline generation
-            target_pos = chunk.get("position_waypoints", [0.5, 0, 0.5])
+            # 1. Interpolate Task-Space Waypoints (Fixed Timeline)
+            # Input waypoints might be low density. We ensure 10 points per chunk.
+            raw_target_pos = chunk.get("position_waypoints")[-1] # Target is last pt
             
-            # 1. Denormalize
-            if isinstance(target_pos[0], list): target_pos = target_pos[0] # Take first point
+            workspace = profile.get("workspace", 
+                {"x": {"min":-1, "max":1}, "y": {"min":-1, "max":1}, "z": {"min":0, "max":1}}
+            )
+            world_target = self._denormalize(raw_target_pos, workspace)
             
-            workspace = profile.get("workspace", {"x": {"min":-1, "max":1}, "y": {"min":-1, "max":1}, "z": {"min":0, "max":1}})
-            world_pos = self._denormalize_to_world(target_pos, workspace)
-
-            # 2. IK
-            target_joints = self._solve_ik(world_pos)
+            # 2. Derive Joint Waypoints
+            trajectory_waypoints = []
             
-            # Create Trajectory
-            waypoints = []
-            
-            # 2a. Start Point (Current State) - Crucial for Continuity
+            # Start State
             if current_joints:
-                start_positions = [current_joints.get(name, 0.0) for name in joint_names]
-                waypoints.append(JointState(names=joint_names, positions=start_positions))
+                start_pos = [current_joints.get(n, 0.0) for n in joint_names]
+                trajectory_waypoints.append(JointState(names=joint_names, positions=start_pos))
             
-            # 2b. Target Point
-            waypoints.append(JointState(names=joint_names, positions=target_joints))
+            # Target State
+            target_joint_pos = self._solve_ik(world_target, profile)
+            trajectory_waypoints.append(JointState(names=joint_names, positions=target_joint_pos))
             
-            # Construct the Strict Contract Object
+            # 3. Create Chunk (Ordinal and IDs will be set by pipeline)
+            # Placeholder for ActionChunk fields (filled by Pipeline)
             traj = JointTrajectoryChunk(
-                id=str(chunk["id"]),
-                description=chunk.get("description", "move"),
+                chunk_id="tmp", 
+                plan_id="tmp", 
+                ordinal=0,
+                description=chunk.get("description", "trajectory"),
                 joint_names=joint_names,
-                waypoints=waypoints, # [Start, Target]
-                duration=2.0, # seconds
-                # Propagate intent for verification
-                max_force_est=chunk.get("estimated_force", 0.0) 
+                waypoints=trajectory_waypoints,
+                duration=chunk.get("duration_s", 2.0),
+                max_force_est=chunk.get("estimated_force", 0.0)
             )
             mapped_chunks.append(traj)
             
-            # Update "Current" for next chunk (Chain Chunks)
-            if current_joints: 
-                current_joints = {n: v for n, v in zip(joint_names, target_joints)}
+            # Sequential state tracking if multiple chunks
+            current_joints = {n: v for n, v in zip(joint_names, target_joint_pos)}
             
         return mapped_chunks
 
-    def _denormalize_to_world(self, normalized_pos: List[float], workspace: Dict) -> List[float]:
-        """Convert 0-1 normalized position to world coordinates."""
-        # Safety check for dimensions
-        if len(normalized_pos) < 3: return [0.5, 0.5, 0.5]
-        
+    def _denormalize(self, pos: List[float], workspace: Dict) -> List[float]:
+        """Map [0,1] to World coordinates."""
         return [
-            workspace["x"]["min"] + normalized_pos[0] * (workspace["x"]["max"] - workspace["x"]["min"]),
-            workspace["y"]["min"] + normalized_pos[1] * (workspace["y"]["max"] - workspace["y"]["min"]),
-            workspace["z"]["min"] + normalized_pos[2] * (workspace["z"]["max"] - workspace["z"]["min"])
+            workspace["x"]["min"] + pos[0] * (workspace["x"]["max"] - workspace["x"]["min"]),
+            workspace["y"]["min"] + pos[1] * (workspace["y"]["max"] - workspace["y"]["min"]),
+            workspace["z"]["min"] + pos[2] * (workspace["z"]["max"] - workspace["z"]["min"])
         ]

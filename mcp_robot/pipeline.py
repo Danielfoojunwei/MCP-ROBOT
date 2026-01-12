@@ -1,177 +1,192 @@
-
 import asyncio
-import json
-from typing import Dict
+import logging
+from typing import Dict, List, Optional
 import numpy as np
 
+from mcp_robot.runtime.determinism import StableHasher, DeterminismConfig, global_clock
+from mcp_robot.contracts.schemas import (
+    RobotStateSnapshot, PerceptionSnapshot, ActionChunk, JointTrajectoryChunk, TaskPlan
+)
 from mcp_robot.planning.task_decomposer import ALOHATaskDecomposer
 from mcp_robot.planning.long_horizon_planner import ACTLongHorizonPlanner
 from mcp_robot.action_encoder.visio_tactile_action_encoder import VisioTactileActionEncoder
 from mcp_robot.action_encoder.universal_action_encoder import UniversalActionEncoder
 from mcp_robot.verification.verification_engine import VerificationEngine
 from mcp_robot.execution.ros_interface import ROS2Adapter
-from mcp_robot.contracts.schemas import JointTrajectoryChunk
+from mcp_robot.learning.learning_loop import LearningLoop
 from mcp_robot.simulation.kinematic_sim import KinematicSimulator
 from mcp_robot.verification.physics_engine import PhysicsEngine
-from mcp_robot.learning.learning_loop import LearningLoop
 
 class MRCPUnifiedPipeline:
     """
-    Complete pipeline: Task → Execution → Learning
-    Orchestrates all 7 tiers with Strict Contracts & Kinematic State.
+    Tier 0: Pure Orchestration Pipeline.
+    Strictly deterministic: Input Snapshots -> Verified Action Chunks.
     """
     
-    def __init__(self, robot_id: str):
-        # Mock Configs
-        robot_profiles = {robot_id: {
-            "workspace": {"x": {"min":-1, "max":1}, "y": {"min":-1, "max":1}, "z": {"min":0, "max":1}},
-            "gripper": {"max_force_n": 100},
+    def __init__(self, robot_id: str, config: Optional[DeterminismConfig] = None):
+        self.robot_id = robot_id
+        self.config = config or DeterminismConfig()
+        self.lock = asyncio.Lock()
+        
+        # Robot Specific Profile (Stable)
+        self.robot_profile = {
+            "workspace": {"x": {"min":-1.0, "max":1.0}, "y": {"min":-1.0, "max":1.0}, "z": {"min":0.0, "max":1.0}},
+            "gripper": {"max_force_n": 100.0},
             "joint_names": ["joint_1", "joint_2", "joint_3", "joint_4", "joint_5", "joint_6", "joint_7"],
             "joint_limits": {
-                "joint_1": (-3.14, 3.14),
-                "joint_2": (-2.0, 2.0),
-                "joint_3": (-3.14, 3.14),
-                "joint_4": (-3.14, 3.14),
-                "joint_5": (-3.14, 3.14),
-                "joint_6": (-3.14, 3.14),
+                "joint_1": (-3.14, 3.14), "joint_2": (-2.0, 2.0), "joint_3": (-3.14, 3.14),
+                "joint_4": (-3.14, 3.14), "joint_5": (-3.14, 3.14), "joint_6": (-3.14, 3.14),
                 "joint_7": (-6.28, 6.28)
             }
-        }}
-        tactile_db = {} 
+        }
         
-        self.robot_id = robot_id
-        
-        # Initialize Simulator (Digital Twin)
+        # Initialize Tiers
         self.kinematic_sim = KinematicSimulator()
-        
-        # Initialize all tiers
         self.tier1_decomposer = ALOHATaskDecomposer()
         self.tier2_planner = ACTLongHorizonPlanner()
-        self.tier3_encoder = VisioTactileActionEncoder(robot_profiles[robot_id], tactile_db)
-        self.tier4_mapper = UniversalActionEncoder(robot_profiles)
-        self.tier5_verifier = VerificationEngine(robot_profiles[robot_id], self.kinematic_sim)
-        
-        # TIER 6: Real ROS2 Bridge
-        # Configurable: "SIM" (Digital Twin) or "HARDWARE" (Real Robot)
+        self.tier3_encoder = VisioTactileActionEncoder(self.robot_profile, {})
+        self.tier4_mapper = UniversalActionEncoder({robot_id: self.robot_profile})
+        self.tier5_verifier = VerificationEngine(self.robot_profile, self.kinematic_sim)
         self.tier6_bridge = ROS2Adapter(robot_id, execution_mode="SIM")
+        self.tier7_learner = LearningLoop({})
         
-        self.tier7_learner = LearningLoop(tactile_db)
-        
-        # Learning Logs Storage (exposed to MCP)
-        self.logs = []
-        # Plan storage
-        self.active_plans = {}
-    
-    async def process_task(self, task_instruction: str) -> Dict:
-        """
-        Executes Tier 1 & 2 (Planning Phase).
-        Returns a Plan ID.
-        """
-        print(f"\n[MRCP Pipeline]: {task_instruction}")
-        
-        # Mock vision data
-        camera_frames = {"overhead": np.zeros((224,224,3)), "wrist": np.zeros((224,224,3))}
-        robot_state = {}
-        
-        # TIER 1
-        subtasks = await self.tier1_decomposer.decompose_task(
-            task_instruction=task_instruction,
-            vision_frame=camera_frames["overhead"]
-        )
-        
-        # TIER 2
-        plan_result = await self.tier2_planner.plan_action_chunks(
-            subtasks=subtasks,
-            current_frame=camera_frames["overhead"],
-            robot_state=robot_state,
-            task_instruction=task_instruction
-        )
-        
-        # Pre-process Tier 3 & 4
-        chunks = plan_result["chunks"]
-        chunks = await self.tier3_encoder.augment_chunks_with_tactile(
-             chunks, camera_frames["overhead"], [], {}
-        )
-        
-        # TIER 4: Returns List[JointTrajectoryChunk] Objects
-        current_sim_state = self.kinematic_sim.get_state_vector()
-        current_joints = current_sim_state.get("joints")
-        
-        traj_objects = await self.tier4_mapper.map_chunks_to_robot(
-             chunks, 
-             self.robot_id, 
-             camera_frames["wrist"], 
-             camera_frames["overhead"],
-             current_joints=current_joints
-        )
+        self.active_plans: Dict[str, TaskPlan] = {}
+        self.execution_results: Dict[str, Dict] = {} # Idempotency cache
 
-        plan_id = f"plan_{int(asyncio.get_event_loop().time())}"
-        
-        # We store the *Objects* in memory. 
-        # For JSON debug we might serialize them, but execution uses Objects.
-        plan_data = {
-            "plan_id": plan_id,
-            "instruction": task_instruction,
-            "subtasks": subtasks,
-            "chunks": [t.dict() for t in traj_objects], # Serialize for API/Viz
-            "chunk_objects": traj_objects, # Keep Objects for Execution
-            "total_chunks": len(traj_objects)
-        }
-        self.active_plans[plan_id] = plan_data
-        return plan_data
-
-    async def execute_specific_chunk(self, plan_id: str, chunk_id: str) -> Dict:
+    async def process_task(
+        self, 
+        instruction: str, 
+        perception: PerceptionSnapshot, 
+        state: RobotStateSnapshot
+    ) -> TaskPlan:
         """
-        Orchestrates Tier 5 (Verify) -> Tier 6 (ROS2 Action).
+        Deterministic Planning Entrypoint.
+        Input: Instruction + environment snapshots.
+        Output: Fully formed, hashed TaskPlan.
         """
-        # Strict Plan Ownership
-        if not plan_id or plan_id not in self.active_plans:
-             return {"status": "ERROR", "reason": f"Plan {plan_id} not found/expired."}
-
-        plan = self.active_plans[plan_id]
-        target_chunk_obj = None
-        
-        # Find the Object
-        for obj in plan["chunk_objects"]:
-             if str(obj.id) == str(chunk_id):
-                 target_chunk_obj = obj
-                 break
+        async with self.lock:
+            # 1. Deterministic ID Generation
+            input_dict = {
+                "instruction": instruction,
+                "perception": perception.model_dump(),
+                "state": state.model_dump()
+            }
+            input_digest = StableHasher.sha256_json(input_dict)
+            config_digest = StableHasher.sha256_json(self.config.model_dump())
             
-        if not target_chunk_obj:
-             return {"status": "ERROR", "reason": f"Chunk {chunk_id} not found in plan {plan_id}."}
+            plan_id = StableHasher.sha256_json({
+                "input_digest": input_digest,
+                "config_digest": config_digest,
+                "schema_version": state.schema_version
+            })
 
-        camera_frame = np.zeros((224,224,3))
-        
-        # Tier 5: Verification (Safety Chip) - Uses Object & Physics Engine
-        # We call the static method on PhysicsEngine directly here for efficiency, 
-        # or use the wrapper. Let's use the wrapper if updated, but for now direct Physics call is cleanest integration.
-        sim_state = self.kinematic_sim.get_state_vector()
-        
-        # VERIFY TRAJECTORY OBJECT
-        # Pass Configured Joint Limits from Profile
-        joint_limits = self.tier5_verifier.robot_profile.get("joint_limits")
-        safety_report = PhysicsEngine.verify_trajectory(target_chunk_obj, sim_state, joint_limits)
-        
-        if not safety_report["valid"]:
-            print(f"[Tier 5] CRITICAL: Safety Chip Rejected Trajectory: {safety_report['reason']}")
-            return {"status": "rejected", "reason": safety_report['reason']}
-        
-        print(f"[Tier 5] Trajectory Certified Safe. Handing off to ROS2 Bridge.")
+            if plan_id in self.active_plans:
+                return self.active_plans[plan_id]
+
+            logging.info(f"[Pipeline] Planning {plan_id} for '{instruction}'")
+
+            # TIER 1: Decompose
+            subtasks = await self.tier1_decomposer.decompose_task(
+                task_instruction=instruction,
+                vision_frame=None, 
+                detected_objects=perception.detected_objects
+            )
+
+            # TIER 2: Long-Horizon Plan
+            plan_result = await self.tier2_planner.plan_action_chunks(
+                subtasks=subtasks,
+                current_frame=None, 
+                robot_state=state.model_dump(),
+                task_instruction=instruction
+            )
+
+            # TIER 3/4: Encode & Map
+            raw_chunks = plan_result["chunks"]
+            vision_context = perception.camera_frame_digest
             
-        # Tier 6: Execution (ROS2 Bridge)
-        # Passes the Validated Object
-        result = await self.tier6_bridge.execute_trajectory(target_chunk_obj)
-        
-        # UPDATE SIMULATOR STATE
-        if result.get("success"):
-            last_wp = target_chunk_obj.waypoints[-1]
-            # Convert JointState list to list of values (ordered by keys?)
-            # JointState has .positions which is list. The names match .joint_names.
-            self.kinematic_sim.set_joint_state(last_wp.positions)
+            augmented_chunks = await self.tier3_encoder.augment_chunks_with_tactile(
+                raw_chunks, None, perception.detected_objects, perception.tactile_summary
+            )
             
-        self.kinematic_sim.step() 
-        
-        # Tier 7: Learning (Mock log)
-        self.logs.append(result)
-        
-        return result
+            traj_objects = await self.tier4_mapper.map_chunks_to_robot(
+                augmented_chunks, self.robot_id, None, None, current_joints=state.to_ordered_dict()
+            )
+
+            # 2. Finalize Chunk IDs deterministically
+            final_chunks = []
+            for i, traj in enumerate(traj_objects):
+                chunk_id = StableHasher.sha256_json({
+                    "plan_id": plan_id,
+                    "ordinal": i,
+                    "payload_digest": StableHasher.sha256_json(traj.model_dump())
+                })
+                traj.chunk_id = chunk_id
+                traj.plan_id = plan_id
+                traj.ordinal = i
+                traj.timestamp = global_clock.now()
+                final_chunks.append(traj)
+
+            plan = TaskPlan(
+                plan_id=plan_id,
+                instruction=instruction,
+                input_digest=input_digest,
+                config_digest=config_digest,
+                chunks=final_chunks,
+                created_at=global_clock.now()
+            )
+            
+            self.active_plans[plan_id] = plan
+            return plan
+
+    async def execute_chunk(self, plan_id: str, chunk_id: str) -> Dict:
+        """
+        Deterministic Execution Entrypoint.
+        """
+        async with self.lock:
+            # 1. Idempotency Check
+            exec_id = f"{plan_id}:{chunk_id}"
+            if exec_id in self.execution_results:
+                return self.execution_results[exec_id]
+
+            if plan_id not in self.active_plans:
+                return {"status": "ERROR", "reason": f"Plan {plan_id} not found."}
+
+            plan = self.active_plans[plan_id]
+            target_chunk = next((c for c in plan.chunks if c.chunk_id == chunk_id), None)
+            
+            if not target_chunk:
+                return {"status": "ERROR", "reason": f"Chunk {chunk_id} not found."}
+
+            # 2. Tier 5: Verification (Auth Safety Gate)
+            sim_state = self.kinematic_sim.get_state_vector()
+            # Physics verifier now takes Snapshot-derived dicts
+            safety_report = PhysicsEngine.verify_trajectory(
+                target_chunk, sim_state, self.robot_profile["joint_limits"]
+            )
+
+            if not safety_report["valid"]:
+                result = {"status": "REJECTED", "reason": safety_report["reason"]}
+                self.execution_results[exec_id] = result
+                return result
+
+            # 3. Tier 6: Execution
+            logging.info(f"[Pipeline] Executing {chunk_id}")
+            result = await self.tier6_bridge.execute_trajectory(target_chunk)
+            
+            # 4. Deterministic SIM Update
+            if result.get("success") and self.tier6_bridge.mode == "SIM":
+                # In SIM, we update based on planned target, NOT wall-clock feedback
+                if isinstance(target_chunk, JointTrajectoryChunk):
+                    last_wp = target_chunk.waypoints[-1]
+                    self.kinematic_sim.set_joint_state(last_wp.positions)
+            
+            self.kinematic_sim.step()
+            
+            final_result = {
+                "status": "SUCCESS" if result.get("success") else "FAILED",
+                "ros_result": result,
+                "executed_at": global_clock.now()
+            }
+            
+            self.execution_results[exec_id] = final_result
+            return final_result

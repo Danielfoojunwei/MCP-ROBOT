@@ -1,96 +1,103 @@
-
 import numpy as np
-import time
-from typing import List, Dict, Any
-
-# Mock Loaders (Placeholders for real ML models)
-def load_task_encoder():
-    class MockEncoder:
-        def encode_text(self, text): return np.random.rand(512)
-        def encode_image(self, img): return np.random.rand(512)
-    return MockEncoder()
-
-def load_subtask_classifier(): return None
-def load_semantic_reasoner(): return None
+import logging
+from typing import List, Dict, Any, Optional
+from mcp_robot.runtime.determinism import global_rng, StableHasher
 
 class ALOHATaskDecomposer:
     """
-    Tier 1: High-Level Planning (ALOHA-Inspired)
-    From ALOHA paper: Understand task semantics, decompose into subtasks.
-    
-    Input: "Pick red cube from table, place in bin"
-    Output:
-    [
-        {"type": "grasp_approach", "target": "red_cube", "duration_est": 2.0s},
-        {"type": "grasp_close", "object": "red_cube", "force_profile": "gentle"},
-        ...
-    ]
+    Tier 1: High-Level Planning (Deterministic ALOHA).
+    Decomposes instructions into semantic subtasks using stable heuristics.
     """
     
     def __init__(self):
-        print("Loading Tier 1: ALOHA Task Decomposer...")
-        self.task_encoder = load_task_encoder()  # Vision + Language encoder
-        self.subtask_classifier = load_subtask_classifier()
-        self.semantic_reasoner = load_semantic_reasoner()
+        logging.info("Loading Tier 1: Deterministic Task Decomposer...")
     
     async def decompose_task(
         self,
         task_instruction: str,
-        vision_frame: np.ndarray,
+        vision_frame: Optional[np.ndarray] = None,
         detected_objects: List[Dict] = None
     ) -> List[Dict]:
         """
-        Decompose task into semantic subtasks with context.
+        Decompose task into semantic subtasks.
+        - Uses StableHasher for pseudo-embeddings.
+        - Rule-based parser for determinism.
         """
         if detected_objects is None:
             detected_objects = []
 
-        print(f"[Tier 1] Encoding instruction: '{task_instruction}'")
-        # Encode task instruction
-        task_embedding = self.task_encoder.encode_text(task_instruction)
+        # Generate a stable "embedding" digest for the instruction
+        task_digest = StableHasher.sha256_json(task_instruction)
         
-        # Encode scene (mocking vision frame if None)
-        if vision_frame is None:
-             vision_frame = np.zeros((224, 224, 3))
-        scene_embedding = self.task_encoder.encode_image(vision_frame)
+        logging.info(f"[Tier 1] Processing task: '{task_instruction}' (Digest: {task_digest[:8]})")
         
-        # Reason about task requirements (Mock Logic for Demo)
+        # 1. Deterministic Semantic Parsing
         subtasks = []
+        instruction_lower = task_instruction.lower()
         
-        # Simple heuristic parser for demo purposes
-        actions = []
-        if "pick" in task_instruction.lower():
-            actions.append({"type": "walk_to", "target": "table", "duration": 5.0})
-            actions.append({"type": "scan_workspace", "duration": 1.0})
-            actions.append({"type": "grasp_approach", "target": "cube", "duration": 2.0})
-            actions.append({"type": "grasp_close", "object": "cube", "force": "gentle", "duration": 0.5})
-            actions.append({"type": "lift", "height": 0.3, "duration": 1.0})
+        # Action Map: (Keyword -> Sequence of subtask types)
+        action_map = {
+            "pick": ["walk_to", "scan_workspace", "grasp_approach", "grasp_close", "lift"],
+            "place": ["walk_to", "release"],
+            "move": ["grasp_approach", "grasp_close", "lift", "move_to", "release"]
+        }
+        
+        # Identify actions from instruction
+        planned_actions = []
+        for keyword, sequence in action_map.items():
+            if keyword in instruction_lower:
+                planned_actions.extend(sequence)
+        
+        if not planned_actions:
+            planned_actions = ["idle"]
 
-        if "place" in task_instruction.lower():
-            actions.append({"type": "walk_to", "target": "bin", "duration": 4.0})
-            actions.append({"type": "release", "location": "bin", "duration": 0.5})
+        # 2. Build Subtask Specs
+        for i, action_type in enumerate(planned_actions):
+            # Resolve target object from detected_objects or instruction
+            target = self._resolve_target(action_type, instruction_lower, detected_objects)
             
-        if not actions: # Fallback
-             actions.append({"type": "idle", "duration": 0.0})
-
-        for action_spec in actions:
             subtask = {
-                "type": action_spec["type"],
-                "target_object": action_spec.get("target") or action_spec.get("object"),
-                "estimated_duration": action_spec.get("duration", 1.0),
-                "criticality": self._assess_criticality(action_spec),  # high/medium/low
-                "force_requirements": action_spec.get("force", "normal")
+                "type": action_type,
+                "target_object": target,
+                "estimated_duration": self._get_duration(action_type),
+                "criticality": self._assess_criticality(action_type),
+                "force_requirements": "gentle" if "grasp_close" in action_type else "normal"
             }
             subtasks.append(subtask)
         
         return subtasks
     
-    def _assess_criticality(self, subtask_spec: Dict) -> str:
-        """Identify if subtask is tactile-critical."""
-        action_type = subtask_spec.get("type", "")
+    def _resolve_target(self, action_type: str, instruction: str, objects: List[Dict]) -> str:
+        """Deterministically resolve the target object."""
+        # Check if any detected object's type is in the instruction
+        for obj in objects:
+            if obj.get("type", "").lower() in instruction:
+                return obj["type"]
+        
+        # Fallback to instruction keywords
+        if "cube" in instruction: return "cube"
+        if "apple" in instruction: return "apple"
+        if "bin" in instruction: return "bin"
+        
+        return "object"
+
+    def _get_duration(self, action_type: str) -> float:
+        """Stable duration constants."""
+        durations = {
+            "walk_to": 4.0,
+            "grasp_approach": 2.0,
+            "grasp_close": 0.5,
+            "lift": 1.0,
+            "release": 0.5,
+            "scan_workspace": 1.0,
+            "idle": 0.0
+        }
+        return durations.get(action_type, 1.0)
+
+    def _assess_criticality(self, action_type: str) -> str:
+        """Deterministic criticality mapping."""
         if action_type in ["grasp_close", "lift", "release"]:
-            return "high"  # Tactile feedback critical
-        elif action_type in ["grasp_approach", "move", "walk_to"]:
+            return "high"
+        elif action_type in ["grasp_approach", "move_to", "walk_to"]:
             return "medium"
-        else:
-            return "low"
+        return "low"
